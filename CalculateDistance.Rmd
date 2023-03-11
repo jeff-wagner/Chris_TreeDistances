@@ -1,0 +1,99 @@
+---
+title: "Calculating Distances Between Trees and Infrastructure"
+output: html_notebook
+---
+
+### This script will iterate through Marula tree locations and calculate distances to different types of infrastructure. 
+
+```{r message=FALSE, warnings=FALSE}
+library(tidyverse)
+library(sf)
+library(terra)
+library(tidyterra)
+library(readxl)
+```
+
+### Load and clean up tree locations:
+```{r}
+trees <- read_excel('./Marula_Mastersheet_12-30-2020 for report.xlsx', sheet = 1)
+trees <- trees %>% 
+  dplyr::select(Site, Tree, `Y coordinate`, `X coordinate`) %>% 
+  rename(X=`X coordinate`, Y=`Y coordinate`) %>% 
+  distinct(Tree, .keep_all = TRUE) %>% 
+  drop_na() %>% 
+  mutate(Y=ifelse(Y>0, Y*-1, Y)) %>% 
+  filter(Tree != "H1" & Tree != "H4") # Remove this line once you correct the coordinates for these trees
+
+write.csv(trees, "./tree_locations.csv")
+
+# Convert to spatial points
+trees <- terra::vect(trees, geom = c("X", "Y"), crs = "EPSG:4326")
+```
+
+### Load Study Area and Double-check Tree Points
+```{r}
+BNR <- vect('/Users/jeff/Documents/GitHub/Chris_TreeDistances/Infrastructure/Balule boundaries 2019/UTM 36S/BNR 2019 - UTM36S.shp', crs = "EPSG:32736")
+
+# Reproject trees to BNR projection
+trees.UTM <- project(trees, BNR)
+
+ggplot() +
+  geom_spatvector(data = BNR, color = "black", fill = NA) +
+  geom_spatvector(data=trees.UTM, aes(color="black"), cex = 1, show.legend = "point") +
+  scale_color_identity(name = NULL, labels = c(black = "Tree Sites"), guide = "legend")
+ 
+```
+
+### Layers to add:
+- Balule all buildings
+- OWNR roads
+- fences
+- All waterholes
+
+### Load layers and Calculate Distances:
+```{r}
+# Read in datasets as vectors
+waterholes <- vect("./Infrastructure/Infrastructure/Waterholes/All Waterholes.shp")
+buildings <- vect("./Infrastructure/Infrastructure/Buildings/Balule all buildings/Balule all buildings.shp")
+fences <- vect("./Infrastructure/Infrastructure/Fences/fences.shp")
+roads <- vect("./Infrastructure/Infrastructure/Roads all/OWNR roads.shp")
+
+# Reproject to UTM
+waterholes.UTM <- project(waterholes, trees.UTM)
+buildings.UTM <- project(buildings, trees.UTM)
+fences.UTM <- project(fences, trees.UTM)
+
+# Buffer roads (1.5m)
+roads.buffer <- buffer(roads, 1.5)
+
+
+ggplot() +
+  geom_spatvector(data = BNR, color = "gray50", fill = NA) +
+  geom_spatvector(data=trees.UTM, aes(color="black"), cex = 1, show.legend = "point") +
+  scale_color_identity(name = NULL, labels = c(black = "Tree Sites"), guide = "legend") +
+  geom_spatvector(data = waterholes.UTM, aes(color="blue"), cex = 1, show.legend = "point") +
+  scale_color_identity(name = NULL, labels = c(blue = "Waterholes"), guide = "legend") +
+  geom_spatvector(data = buildings.UTM, aes(color="green"), cex = 1, show.legend = "point") +
+  scale_color_identity(name = NULL, labels = c(green = "Buildings"), guide = "legend") +
+  geom_spatvector(data = fences.UTM, aes(color="red"), cex = 1, show.legend = "line") +
+  scale_color_identity(name = NULL, labels = c(red = "Fences"), guide = "legend")
+
+distances <- data.frame(Site = trees.UTM$Site,
+                        Tree = trees.UTM$Tree,
+                        waterhole_dist = NA,
+                        building_dist = NA,
+                        fence_dist = NA,
+                        road_dist = NA)
+
+layers <- list(waterholes.UTM, buildings.UTM, fences.UTM, roads.buffer)
+
+for(j in 1:length(layers)){
+  dist <- distance(trees.UTM, layers[[j]])
+  for(i in 1:nrow(dist)){
+  distances[i, j+2] <- min(dist[i,])
+  }
+}
+
+write.csv(distances, "./tree_distance_to_infrastructure.csv")
+```
+
